@@ -1,0 +1,74 @@
+name: CI Pipeline
+
+on:
+  - push
+  - pull_request
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [stable, beta]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust ${{ matrix.rust }} with dependency cache
+        uses: actions/setup-rust@v1
+        with:
+          cache: ${{ hashFiles('Cargo.lock') != '' && 'cargo' || '' }}
+
+      - name: Install Rust dependencies
+        if: hashFiles('Cargo.toml') != ''
+        run: cargo fetch --locked
+        shell: bash
+
+      - name: Check formatting and lint
+        if: hashFiles('Cargo.toml') != ''
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+        shell: bash
+
+      - name: Build or typecheck
+        if: hashFiles('Cargo.toml') != ''
+        run: cargo check --all-targets --all-features
+        shell: bash
+
+      - name: Run unit and integration tests
+        if: hashFiles('Cargo.toml') != ''
+        run: cargo nextest run --all-features
+        shell: bash
+
+      - name: Write pipeline summary
+        if: always()
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          SETUP_RUST_OUTCOME: ${{ steps.setup-rust.outcome }}
+          DEPS_OUTCOME: ${{ steps.dependencies.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          {
+            printf '%s\n' '# CI Pipeline'
+            printf '%s\n' ''
+            printf '%s\n' '| Step | Outcome |' '|---|---|'
+            printf '| Checkout | %s |\n' "${CHECKOUT_OUTCOME:-skipped}"
+            printf '| Rust setup | %s |\n' "${SETUP_RUST_OUTCOME:-skipped}"
+            printf '| Dependencies | %s |\n' "${DEPS_OUTCOME:-skipped}"
+            printf '| Lint | %s |\n' "${LINT_OUTCOME:-skipped}"
+            printf '| Build | %s |\n' "${BUILD_OUTCOME:-skipped}"
+            printf '| Tests | %s |\n' "${TEST_OUTCOME:-skipped}"
+          } >> "$GITHUB_STEP_SUMMARY"
+        shell: bash
